@@ -99,43 +99,83 @@ STAGES = {
     }
 }
 
-# 難易度設定（より難しく調整）
+# 難易度設定（より明確な差をつける）
 DIFFICULTY_LEVELS = {
-    "簡単": {"speed_multiplier": 0.8, "spawn_rate": 1.8, "description": "初心者向け"},
-    "普通": {"speed_multiplier": 1.2, "spawn_rate": 1.2, "description": "標準的な難易度"},
-    "難しい": {"speed_multiplier": 1.6, "spawn_rate": 0.8, "description": "上級者向け"},
-    "エキスパート": {"speed_multiplier": 2.2, "spawn_rate": 0.5, "description": "最高難易度"}
+    "簡単": {
+        "speed_multiplier": 0.5, 
+        "spawn_rate": 2.5, 
+        "burst_rate": 3.0,
+        "description": "初心者向け - ゆっくりとした動きで少ない敵"
+    },
+    "普通": {
+        "speed_multiplier": 1.0, 
+        "spawn_rate": 1.5, 
+        "burst_rate": 2.0,
+        "description": "標準的な難易度 - バランスの取れた挑戦"
+    },
+    "難しい": {
+        "speed_multiplier": 1.8, 
+        "spawn_rate": 0.8, 
+        "burst_rate": 1.2,
+        "description": "上級者向け - 速い敵と頻繁な攻撃"
+    },
+    "エキスパート": {
+        "speed_multiplier": 2.5, 
+        "spawn_rate": 0.4, 
+        "burst_rate": 0.6,
+        "description": "最高難易度 - 超高速で大量の敵"
+    }
 }
 
 class Player:
     def __init__(self):
-        self.x = 50
+        self.x = SCREEN_WIDTH // 4  # 中央寄りに配置
         self.y = SCREEN_HEIGHT // 2
         self.width = 50
         self.height = 50
         self.speed = 6
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
         self.shield_animation = 0
+        # 慣性システム
+        self.vel_x = 0
+        self.vel_y = 0
+        self.acceleration = 0.8
+        self.friction = 0.85
+        self.max_speed = 8
     
     def update(self):
         keys = pygame.key.get_pressed()
         
-        # 移動制御
+        # 加速度ベースの移動制御
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.x -= self.speed
+            self.vel_x -= self.acceleration
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.x += self.speed
+            self.vel_x += self.acceleration
         if keys[pygame.K_UP] or keys[pygame.K_w]:
-            self.y -= self.speed
+            self.vel_y -= self.acceleration
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            self.y += self.speed
+            self.vel_y += self.acceleration
+        
+        # 最大速度制限
+        self.vel_x = max(-self.max_speed, min(self.max_speed, self.vel_x))
+        self.vel_y = max(-self.max_speed, min(self.max_speed, self.vel_y))
+        
+        # 摩擦による減速
+        if not (keys[pygame.K_LEFT] or keys[pygame.K_a] or keys[pygame.K_RIGHT] or keys[pygame.K_d]):
+            self.vel_x *= self.friction
+        if not (keys[pygame.K_UP] or keys[pygame.K_w] or keys[pygame.K_DOWN] or keys[pygame.K_s]):
+            self.vel_y *= self.friction
+        
+        # 位置更新
+        self.x += self.vel_x
+        self.y += self.vel_y
         
         # 画面境界チェック
         self.x = max(0, min(self.x, SCREEN_WIDTH - self.width))
         self.y = max(0, min(self.y, SCREEN_HEIGHT - self.height))
         
-        self.rect.x = self.x
-        self.rect.y = self.y
+        self.rect.x = int(self.x)
+        self.rect.y = int(self.y)
         
         # シールドアニメーション
         self.shield_animation = (self.shield_animation + 1) % 60
@@ -149,6 +189,12 @@ class Player:
         shield_radius = 25 + int(5 * math.sin(self.shield_animation * 0.2))
         pygame.draw.circle(screen, CYBER_CYAN, (center_x, center_y), shield_radius, 2)
         
+        # 移動方向インジケーター
+        if abs(self.vel_x) > 1 or abs(self.vel_y) > 1:
+            trail_x = center_x - int(self.vel_x * 3)
+            trail_y = center_y - int(self.vel_y * 3)
+            pygame.draw.line(screen, LASER_GREEN, (center_x, center_y), (trail_x, trail_y), 3)
+        
         # メインシールド
         pygame.draw.circle(screen, NEBULA_BLUE, (center_x, center_y), 20, 3)
         pygame.draw.circle(screen, LASER_GREEN, (center_x, center_y), 15)
@@ -161,53 +207,191 @@ class Player:
         text = font.render("IAM", True, SPACE_BLACK)
         text_rect = text.get_rect(center=(center_x, center_y))
         screen.blit(text, text_rect)
+    
+    def get_position(self):
+        return (self.rect.centerx, self.rect.centery)
 
 class SecurityRisk:
-    def __init__(self, stage_risks, difficulty_multiplier):
+    def __init__(self, stage_risks, difficulty_multiplier, player_pos, difficulty_level="普通"):
         self.risk_text = random.choice(stage_risks)
+        self.difficulty_level = difficulty_level
         
         # 文字列の長さに基づいて幅を計算
         font = get_japanese_font(14)
         text_surface = font.render(self.risk_text, True, STAR_WHITE)
         text_width = text_surface.get_width()
         
-        self.width = max(text_width + 20, 80)  # 最小幅80px、テキスト幅+余白20px
+        self.width = max(text_width + 20, 80)
         self.height = 35
         
-        self.x = SCREEN_WIDTH
-        self.y = random.randint(0, SCREEN_HEIGHT - self.height)
+        # 画面の外周からランダムに出現（円形配置）
+        angle = random.uniform(0, 2 * math.pi)
+        spawn_distance = 400  # 画面中心からの距離
         
-        base_speed = random.randint(3, 6)  # より速く
-        self.speed = int(base_speed * difficulty_multiplier)
+        center_x = SCREEN_WIDTH // 2
+        center_y = SCREEN_HEIGHT // 2
+        
+        # 出現位置を円形に配置
+        self.x = center_x + math.cos(angle) * spawn_distance
+        self.y = center_y + math.sin(angle) * spawn_distance
+        
+        # プレイヤーに向かう方向ベクトルを計算
+        player_x, player_y = player_pos
+        dx = player_x - self.x
+        dy = player_y - self.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        # 速度設定（難易度に応じて基本速度を調整）
+        if difficulty_level == "簡単":
+            base_speed = random.uniform(1.5, 3.0)
+        elif difficulty_level == "普通":
+            base_speed = random.uniform(2.5, 4.5)
+        elif difficulty_level == "難しい":
+            base_speed = random.uniform(4.0, 6.5)
+        elif difficulty_level == "エキスパート":
+            base_speed = random.uniform(6.0, 9.0)
+        else:
+            base_speed = random.uniform(2, 5)
+        
+        self.speed = base_speed * difficulty_multiplier
+        
+        if distance > 0:
+            # 正規化して方向を決定
+            self.vel_x = (dx / distance) * self.speed
+            self.vel_y = (dy / distance) * self.speed
+        else:
+            self.vel_x = 0
+            self.vel_y = 0
+        
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
         
         # 宇宙風の色とエフェクト
         risk_colors = [PLASMA_RED, COSMIC_ORANGE, VOID_PURPLE, GALAXY_PINK]
         self.color = random.choice(risk_colors)
-        # 色が有効なRGB値であることを確認
         self.color = tuple(max(0, min(255, c)) for c in self.color[:3])
         self.pulse_animation = random.randint(0, 59)
         self.trail_particles = []
+        
+        # ランダムな軌道変化パラメータ（難易度に応じて調整）
+        self.orbit_angle = random.uniform(0, 2 * math.pi)
+        
+        if difficulty_level == "簡単":
+            self.orbit_speed = random.uniform(0.01, 0.03)
+            self.orbit_radius = random.uniform(5, 15)
+            self.homing_strength = random.uniform(0.005, 0.015)
+        elif difficulty_level == "普通":
+            self.orbit_speed = random.uniform(0.03, 0.06)
+            self.orbit_radius = random.uniform(15, 30)
+            self.homing_strength = random.uniform(0.01, 0.025)
+        elif difficulty_level == "難しい":
+            self.orbit_speed = random.uniform(0.06, 0.10)
+            self.orbit_radius = random.uniform(25, 45)
+            self.homing_strength = random.uniform(0.02, 0.04)
+        elif difficulty_level == "エキスパート":
+            self.orbit_speed = random.uniform(0.08, 0.15)
+            self.orbit_radius = random.uniform(35, 60)
+            self.homing_strength = random.uniform(0.03, 0.06)
+        else:
+            self.orbit_speed = random.uniform(0.03, 0.08)
+            self.orbit_radius = random.uniform(15, 40)
+            self.homing_strength = random.uniform(0.01, 0.03)
+        
+        # 攻撃パターン（難易度に応じて複雑さを調整）
+        if difficulty_level == "簡単":
+            self.attack_pattern = random.choice(['direct', 'direct', 'curve'])  # 簡単なパターンが多い
+        elif difficulty_level == "普通":
+            self.attack_pattern = random.choice(['direct', 'spiral', 'curve'])
+        elif difficulty_level == "難しい":
+            self.attack_pattern = random.choice(['direct', 'spiral', 'zigzag', 'curve'])
+        elif difficulty_level == "エキスパート":
+            self.attack_pattern = random.choice(['spiral', 'zigzag', 'curve', 'spiral'])  # 複雑なパターンが多い
+        else:
+            self.attack_pattern = random.choice(['direct', 'spiral', 'zigzag', 'curve'])
+        
+        self.pattern_timer = 0
     
-    def update(self):
-        self.x -= self.speed
-        self.rect.x = self.x
+    def update(self, player_pos):
+        player_x, player_y = player_pos
+        
+        # 攻撃パターンに基づく移動
+        if self.attack_pattern == 'direct':
+            # 直接攻撃 + 軽いホーミング
+            dx = player_x - self.x
+            dy = player_y - self.y
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            if distance > 0:
+                self.vel_x += (dx / distance) * self.homing_strength
+                self.vel_y += (dy / distance) * self.homing_strength
+        
+        elif self.attack_pattern == 'spiral':
+            # スパイラル攻撃
+            self.orbit_angle += self.orbit_speed
+            spiral_x = math.cos(self.orbit_angle) * self.orbit_radius * 0.1
+            spiral_y = math.sin(self.orbit_angle) * self.orbit_radius * 0.1
+            
+            # プレイヤー方向 + スパイラル
+            dx = player_x - self.x
+            dy = player_y - self.y
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            if distance > 0:
+                self.vel_x = (dx / distance) * self.speed * 0.7 + spiral_x
+                self.vel_y = (dy / distance) * self.speed * 0.7 + spiral_y
+        
+        elif self.attack_pattern == 'zigzag':
+            # ジグザグ攻撃
+            self.pattern_timer += 1
+            zigzag_strength = 3
+            
+            if self.pattern_timer % 30 < 15:
+                perpendicular_x = -self.vel_y / (math.sqrt(self.vel_x**2 + self.vel_y**2) + 0.001)
+                perpendicular_y = self.vel_x / (math.sqrt(self.vel_x**2 + self.vel_y**2) + 0.001)
+            else:
+                perpendicular_x = self.vel_y / (math.sqrt(self.vel_x**2 + self.vel_y**2) + 0.001)
+                perpendicular_y = -self.vel_x / (math.sqrt(self.vel_x**2 + self.vel_y**2) + 0.001)
+            
+            self.vel_x += perpendicular_x * zigzag_strength
+            self.vel_y += perpendicular_y * zigzag_strength
+        
+        elif self.attack_pattern == 'curve':
+            # カーブ攻撃
+            self.orbit_angle += self.orbit_speed
+            curve_strength = 2
+            
+            curve_x = math.sin(self.orbit_angle) * curve_strength
+            curve_y = math.cos(self.orbit_angle) * curve_strength
+            
+            self.vel_x += curve_x
+            self.vel_y += curve_y
+        
+        # 基本移動
+        self.x += self.vel_x
+        self.y += self.vel_y
+        
+        self.rect.x = int(self.x)
+        self.rect.y = int(self.y)
         self.pulse_animation = (self.pulse_animation + 1) % 60
         
         # パーティクルトレイル効果
-        if random.random() < 0.3:
+        if random.random() < 0.4:
             particle = {
-                'x': self.rect.right,
-                'y': self.rect.centery + random.randint(-5, 5),
-                'life': 20,
-                'color': self.color
+                'x': self.rect.centerx,
+                'y': self.rect.centery,
+                'life': 15,
+                'color': self.color,
+                'vel_x': -self.vel_x * 0.2 + random.uniform(-1, 1),
+                'vel_y': -self.vel_y * 0.2 + random.uniform(-1, 1)
             }
             self.trail_particles.append(particle)
         
         # パーティクル更新
         for particle in self.trail_particles[:]:
             particle['life'] -= 1
-            particle['x'] += random.randint(-2, 1)
+            particle['x'] += particle['vel_x']
+            particle['y'] += particle['vel_y']
+            particle['vel_x'] *= 0.9
+            particle['vel_y'] *= 0.9
             if particle['life'] <= 0:
                 self.trail_particles.remove(particle)
     
@@ -215,9 +399,10 @@ class SecurityRisk:
         # パーティクルトレイル描画
         for particle in self.trail_particles:
             if particle['life'] > 0:
-                # 色の値を安全な範囲に制限
                 safe_color = tuple(max(0, min(255, c)) for c in particle['color'][:3])
-                pygame.draw.circle(screen, safe_color, (int(particle['x']), int(particle['y'])), 2)
+                alpha_factor = particle['life'] / 15
+                faded_color = tuple(int(c * alpha_factor) for c in safe_color)
+                pygame.draw.circle(screen, faded_color, (int(particle['x']), int(particle['y'])), 2)
         
         # メインの脅威オブジェクト（宇宙船風）
         pulse_intensity = max(-50, min(50, int(20 * math.sin(self.pulse_animation * 0.2))))
@@ -263,7 +448,11 @@ class SecurityRisk:
         screen.blit(text, text_rect)
     
     def is_off_screen(self):
-        return self.x < -self.width - 50  # テキスト分も考慮
+        margin = 150
+        return (self.x < -margin or 
+                self.x > SCREEN_WIDTH + margin or 
+                self.y < -margin or 
+                self.y > SCREEN_HEIGHT + margin)
 
 class Goal:
     def __init__(self):
@@ -318,7 +507,9 @@ class Game:
         self.game_over = False
         self.won = False
         self.spawn_timer = 0
-        self.spawn_delay = 70  # より頻繁に出現
+        self.spawn_delay = 40  # より頻繁に出現
+        self.burst_timer = 0
+        self.burst_delay = 180  # 3秒ごとに大量出現
         self.current_stage = 1
         self.current_difficulty = "普通"
         self.selected_menu_item = 0
@@ -329,7 +520,17 @@ class Game:
     def spawn_security_risk(self):
         stage_data = STAGES[self.current_stage]
         difficulty_data = DIFFICULTY_LEVELS[self.current_difficulty]
-        self.security_risks.append(SecurityRisk(stage_data["risks"], difficulty_data["speed_multiplier"]))
+        new_risk = SecurityRisk(stage_data["risks"], difficulty_data["speed_multiplier"], self.player.get_position(), self.current_difficulty)
+        self.security_risks.append(new_risk)
+    
+    def spawn_burst_attack(self, count=5):
+        """複数の敵を一度に生成"""
+        stage_data = STAGES[self.current_stage]
+        difficulty_data = DIFFICULTY_LEVELS[self.current_difficulty]
+        
+        for _ in range(count):
+            new_risk = SecurityRisk(stage_data["risks"], difficulty_data["speed_multiplier"], self.player.get_position(), self.current_difficulty)
+            self.security_risks.append(new_risk)
     
     def update(self):
         if self.state == PLAYING:
@@ -345,7 +546,7 @@ class Game:
         # ゴール更新
         self.goal.update()
         
-        # セキュリティリスク生成
+        # セキュリティリスク生成（通常）
         self.spawn_timer += 1
         difficulty_data = DIFFICULTY_LEVELS[self.current_difficulty]
         adjusted_spawn_delay = int(self.spawn_delay * difficulty_data["spawn_rate"])
@@ -353,13 +554,55 @@ class Game:
         if self.spawn_timer >= adjusted_spawn_delay:
             self.spawn_security_risk()
             self.spawn_timer = 0
-            # 時間が経つにつれて難易度上昇（より急激に）
-            if self.spawn_delay > 20:
-                self.spawn_delay -= 2
+            # 難易度に応じた難易度上昇速度
+            difficulty_reduction = 1
+            if self.current_difficulty == "簡単":
+                difficulty_reduction = 0.5
+            elif self.current_difficulty == "普通":
+                difficulty_reduction = 1
+            elif self.current_difficulty == "難しい":
+                difficulty_reduction = 1.5
+            elif self.current_difficulty == "エキスパート":
+                difficulty_reduction = 2
+            
+            if self.spawn_delay > 15:
+                self.spawn_delay -= difficulty_reduction
+        
+        # バースト攻撃（大量出現）
+        self.burst_timer += 1
+        adjusted_burst_delay = int(self.burst_delay * difficulty_data["burst_rate"])
+        
+        if self.burst_timer >= adjusted_burst_delay:
+            # 難易度に応じたバースト数
+            if self.current_difficulty == "簡単":
+                burst_count = random.randint(2, 4)
+            elif self.current_difficulty == "普通":
+                burst_count = random.randint(3, 6)
+            elif self.current_difficulty == "難しい":
+                burst_count = random.randint(5, 10)
+            elif self.current_difficulty == "エキスパート":
+                burst_count = random.randint(8, 15)
+            
+            self.spawn_burst_attack(burst_count)
+            self.burst_timer = 0
+            
+            # バースト間隔も徐々に短く（難易度に応じて）
+            burst_reduction = 5
+            if self.current_difficulty == "簡単":
+                burst_reduction = 2
+            elif self.current_difficulty == "普通":
+                burst_reduction = 3
+            elif self.current_difficulty == "難しい":
+                burst_reduction = 5
+            elif self.current_difficulty == "エキスパート":
+                burst_reduction = 8
+            
+            if self.burst_delay > 60:
+                self.burst_delay -= burst_reduction
         
         # セキュリティリスク更新
         for risk in self.security_risks[:]:
-            risk.update()
+            risk.update(self.player.get_position())
             if risk.is_off_screen():
                 self.security_risks.remove(risk)
                 self.score += 15  # より高いスコア
@@ -424,6 +667,20 @@ class Game:
     def start_game(self):
         self.state = PLAYING
         self.reset_game()
+        
+        # 難易度に応じてプレイヤーの速度を調整
+        if self.current_difficulty == "簡単":
+            self.player.max_speed = 6
+            self.player.acceleration = 0.6
+        elif self.current_difficulty == "普通":
+            self.player.max_speed = 8
+            self.player.acceleration = 0.8
+        elif self.current_difficulty == "難しい":
+            self.player.max_speed = 10
+            self.player.acceleration = 1.0
+        elif self.current_difficulty == "エキスパート":
+            self.player.max_speed = 12
+            self.player.acceleration = 1.2
     
     def reset_game(self):
         self.player = Player()
@@ -433,7 +690,9 @@ class Game:
         self.game_over = False
         self.won = False
         self.spawn_timer = 0
-        self.spawn_delay = 70  # より頻繁に出現
+        self.spawn_delay = 40  # より頻繁に出現
+        self.burst_timer = 0
+        self.burst_delay = 180  # 3秒ごとに大量出現
     
     def draw_menu(self, screen):
         # 宇宙背景
